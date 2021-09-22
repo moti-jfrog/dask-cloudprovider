@@ -44,6 +44,8 @@ class AzureVM(VMInterface):
         bootstrap: bool = None,
         auto_shutdown: bool = None,
         marketplace_plan: dict = {},
+        spot=None,
+        boot_diagnostics=False,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -66,6 +68,8 @@ class AzureVM(VMInterface):
         self.auto_shutdown = auto_shutdown
         self.env_vars = env_vars
         self.marketplace_plan = marketplace_plan
+        self.spot = spot
+        self.boot_diagnostics = boot_diagnostics
 
     async def create_vm(self):
         [subnet_info, *_] = await self.cluster.call_async(
@@ -141,6 +145,11 @@ class AzureVM(VMInterface):
                 "custom_data": cloud_init,
             },
             "hardware_profile": {"vm_size": self.vm_size},
+            "diagnostics_profile": {
+                "boot_diagnostics": {
+                                    "enabled": self.boot_diagnostics
+                }
+            },
             "storage_profile": {
                 "image_reference": self.vm_image,
                 "os_disk": {
@@ -157,6 +166,11 @@ class AzureVM(VMInterface):
             },
             "tags": self.cluster.get_tags(),
         }
+
+        if self.spot:
+            vm_parameters['priority'] = 'Spot'
+            vm_parameters['eviction_policy'] = self.spot['eviction_policy']
+            vm_parameters['billing_profile'] = {'max_price': self.spot['max_price']}
 
         if self.marketplace_plan:
             # Ref: https://docs.microsoft.com/en-us/rest/api/compute/virtual-machines/create-or-update#create-a-vm-with-a-marketplace-image-plan. # noqa
@@ -458,6 +472,8 @@ class AzureVMCluster(VMCluster):
         docker_image=None,
         debug: bool = False,
         marketplace_plan: dict = {},
+        spot=None,
+        boot_diagnostics=False,
         **kwargs,
     ):
         self.config = dask.config.get("cloudprovider.azure.azurevm", {})
@@ -544,6 +560,8 @@ class AzureVMCluster(VMCluster):
                 from a Marketplace image with a plan, all 3 fields 'name', 'publisher' and 'product' must be passed."""
                 )
 
+        self.boot_diagnostics = boot_diagnostics
+
         self.options = {
             "cluster": self,
             "config": self.config,
@@ -556,6 +574,7 @@ class AzureVMCluster(VMCluster):
             "auto_shutdown": self.auto_shutdown,
             "docker_image": self.docker_image,
             "marketplace_plan": self.marketplace_plan,
+            "boot_diagnostics": self.boot_diagnostics
         }
         self.scheduler_options = {
             "vm_size": self.scheduler_vm_size,
@@ -563,4 +582,6 @@ class AzureVMCluster(VMCluster):
             **self.options,
         }
         self.worker_options = {"vm_size": self.vm_size, **self.options}
+        if spot:
+            self.worker_options["spot"] = spot
         super().__init__(debug=debug, **kwargs)
